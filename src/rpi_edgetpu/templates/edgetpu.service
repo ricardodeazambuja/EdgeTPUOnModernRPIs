@@ -1,0 +1,14 @@
+[Unit]
+Description=Edge TPU Inference Service
+After=network.target
+
+[Service]
+Type=simple
+User={user}
+ExecStart={venv_python} {service_script}
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

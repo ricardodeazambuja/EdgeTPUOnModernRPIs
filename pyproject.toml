@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rpi-edgetpu"
+version = "0.1.0"
+description = "Client library and setup CLI for Coral Edge TPU on modern Raspberry Pi OS"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+]
+
+[project.scripts]
+edgetpu-cli = "rpi_edgetpu.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+rpi_edgetpu = ["templates/*"]
