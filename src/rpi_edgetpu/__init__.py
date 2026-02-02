@@ -2,6 +2,6 @@
 
 __version__ = "0.1.0"
 
-from .client import EdgeTPUClient, EdgeTPUBusyError
+from .client import EdgeTPUClient, EdgeTPUError, EdgeTPUBusyError
 
-__all__ = ["EdgeTPUClient", "EdgeTPUBusyError"]
+__all__ = ["EdgeTPUClient", "EdgeTPUError", "EdgeTPUBusyError"]

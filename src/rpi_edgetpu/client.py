@@ -11,7 +11,12 @@ import numpy as np
 SOCKET_PATH = "/tmp/edgetpu.sock"
 
 
-class EdgeTPUBusyError(Exception):
+class EdgeTPUError(Exception):
+    """Raised when the service reports an error (bad model, no TPU, etc.)."""
+    pass
+
+
+class EdgeTPUBusyError(EdgeTPUError):
     """Raised when the server's inference queue is full."""
     pass
 
@@ -63,7 +68,7 @@ class EdgeTPUClient:
         if isinstance(result, dict) and 'error' in result:
             if result['error'] == 'server_busy':
                 raise EdgeTPUBusyError(result.get('message', 'Server busy'))
-            raise RuntimeError(result['error'])
+            raise EdgeTPUError(result.get('message', result['error']))
         return result
 
     def _recv_array_response(self):

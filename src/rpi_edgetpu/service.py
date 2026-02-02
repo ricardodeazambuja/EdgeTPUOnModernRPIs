@@ -21,6 +21,19 @@ import tflite_runtime.interpreter as tflite
 SOCKET_PATH = "/tmp/edgetpu.sock"
 MAX_QUEUE_SIZE = 16
 
+# Exception strings that indicate a TPU hardware error (device disconnected, etc.)
+_TPU_DEVICE_ERROR_SUBSTRINGS = (
+    "Failed to load delegate",
+    "Failed to invoke",
+    "Could not open",
+    "USB transfer error",
+    "device not found",
+    "edgetpu",
+    "libedgetpu",
+    "delegate",
+    "does not satisfy device ordinal",
+)
+
 
 class EdgeTPUService:
     def __init__(self, device_index=0):
@@ -35,16 +48,23 @@ class EdgeTPUService:
         if self.model_path == model_path and self.interpreter:
             return {"status": "already_loaded"}
 
-        self.interpreter = tflite.Interpreter(
-            model_path=model_path,
-            experimental_delegates=[
-                tflite.load_delegate(
-                    'libedgetpu.so.1',
-                    options={"device": f":{self.device_index}"}
-                )
-            ]
-        )
-        self.interpreter.allocate_tensors()
+        try:
+            interpreter = tflite.Interpreter(
+                model_path=model_path,
+                experimental_delegates=[
+                    tflite.load_delegate(
+                        'libedgetpu.so.1',
+                        options={"device": f":{self.device_index}"}
+                    )
+                ]
+            )
+            interpreter.allocate_tensors()
+        except Exception as e:
+            # Keep previous interpreter/model intact on failure
+            return {"error": "load_failed", "message": str(e)}
+
+        # Success — commit the new interpreter
+        self.interpreter = interpreter
         self.input_details = self.interpreter.get_input_details()
         self.output_details = self.interpreter.get_output_details()
         self.model_path = model_path
@@ -127,6 +147,7 @@ class TPUManager:
         self.slots = []
         self.lock = threading.Lock()
         self._workers = []
+        self._rescan_in_progress = False
         self.rescan()
 
     def rescan(self):
@@ -158,6 +179,39 @@ class TPUManager:
             alive_count = sum(1 for s in self.slots if s.alive)
             print(f"TPU rescan complete: {alive_count} device(s) available")
             return alive_count
+
+    def rescan_async(self):
+        """Trigger a rescan on a background thread (deduplicated)."""
+        with self.lock:
+            if self._rescan_in_progress:
+                return
+            self._rescan_in_progress = True
+
+        def _do_rescan():
+            try:
+                self.rescan()
+            finally:
+                with self.lock:
+                    self._rescan_in_progress = False
+
+        threading.Thread(target=_do_rescan, daemon=True, name="tpu-rescan").start()
+
+    def mark_slot_dead(self, slot):
+        """Mark a slot as dead and drain its queue."""
+        with self.lock:
+            slot.alive = False
+            slot.model_path = None
+        # Drain pending requests so waiting clients get immediate errors
+        while True:
+            try:
+                request, future = slot.queue.get_nowait()
+                if not future.done():
+                    future.set_exception(
+                        RuntimeError("TPU device disconnected")
+                    )
+                slot.queue.task_done()
+            except queue.Empty:
+                break
 
     def route(self, model_path):
         """Return slot index for a model. Priority: affinity → empty → LRU eviction."""
@@ -228,6 +282,28 @@ def recv_exact(sock, n):
     return data
 
 
+def _looks_like_device_error(exc):
+    """Return True if the exception looks like a TPU hardware/USB error."""
+    if not isinstance(exc, (RuntimeError, ValueError, OSError)):
+        return False
+    msg = str(exc).lower()
+    return any(s.lower() in msg for s in _TPU_DEVICE_ERROR_SUBSTRINGS)
+
+
+def send_error_response(conn, command, error_dict):
+    """Send an error response using the correct wire format for *command*.
+
+    For infer/embedding: prefix with 4-byte zero (signals JSON-not-numpy), then JSON.
+    For everything else: just length-prefixed JSON.
+    """
+    resp_bytes = json.dumps(error_dict).encode('utf-8')
+    if command in ('infer', 'embedding'):
+        conn.sendall(struct.pack('!I', 0))
+        conn.sendall(struct.pack('!I', len(resp_bytes)) + resp_bytes)
+    else:
+        conn.sendall(struct.pack('!I', len(resp_bytes)) + resp_bytes)
+
+
 def inference_worker(slot, manager):
     """Runs in dedicated thread per TPU. Processes inference requests serially."""
     while True:
@@ -262,7 +338,15 @@ def inference_worker(slot, manager):
                 result = {'error': f'unknown command: {command}'}
             future.set_result(result)
         except Exception as e:
-            future.set_exception(e)
+            if _looks_like_device_error(e):
+                print(f"TPU :{slot.device_index} device error: {e}")
+                manager.mark_slot_dead(slot)
+                manager.rescan_async()
+                future.set_exception(
+                    RuntimeError("tpu_disconnected")
+                )
+            else:
+                future.set_exception(e)
         finally:
             slot.queue.task_done()
 
@@ -286,157 +370,156 @@ def handle_client(conn, manager):
             if command == 'quit':
                 break
 
-            # Build request dict, deserializing numpy data on the client thread
-            request = {'command': command}
+            try:
+                # Build request dict, deserializing numpy data on the client thread
+                request = {'command': command}
 
-            if command == 'load_model':
-                model_path = header['model_path']
-                request['model_path'] = model_path
-                # Route to appropriate TPU
-                client_tpu_idx = manager.route(model_path)
-                client_model_path = model_path
-                request['_slot_idx'] = client_tpu_idx
+                if command == 'load_model':
+                    model_path = header['model_path']
+                    request['model_path'] = model_path
+                    # Route to appropriate TPU
+                    tpu_idx = manager.route(model_path)
+                    request['_slot_idx'] = tpu_idx
 
-            elif command in ('infer', 'detect', 'embedding'):
-                if client_model_path is None:
-                    error_resp = json.dumps({
-                        "error": "no_model",
-                        "message": "Call load_model before inference"
-                    }).encode('utf-8')
-                    if command in ('infer', 'embedding'):
+                elif command in ('infer', 'detect', 'embedding'):
+                    if client_model_path is None:
+                        error_resp = {
+                            "error": "no_model",
+                            "message": "Call load_model before inference"
+                        }
                         # Consume the numpy data from socket first
                         array_bytes = recv_exact(conn, header['data_size'])
-                        conn.sendall(struct.pack('!I', 0))
-                        conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
-                    else:
-                        array_bytes = recv_exact(conn, header['data_size'])
-                        conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
+                        send_error_response(conn, command, error_resp)
+                        continue
+
+                    # Check if our model was evicted from the slot
+                    current_model = manager.get_slot_model(client_tpu_idx)
+                    if current_model != client_model_path:
+                        # Re-route: find a slot for our model
+                        client_tpu_idx = manager.route(client_model_path)
+                        # Inject a load_model before the actual command
+                        load_req = {
+                            'command': 'load_model',
+                            'model_path': client_model_path,
+                            '_slot_idx': client_tpu_idx,
+                        }
+                        load_future = concurrent.futures.Future()
+                        try:
+                            manager.slots[client_tpu_idx].queue.put(
+                                (load_req, load_future), block=False
+                            )
+                        except queue.Full:
+                            error_resp = {
+                                "error": "server_busy",
+                                "message": "Inference queue is full, try again later"
+                            }
+                            # Consume numpy data
+                            array_bytes = recv_exact(conn, header['data_size'])
+                            send_error_response(conn, command, error_resp)
+                            continue
+                        # Wait for reload
+                        try:
+                            load_future.result()
+                        except Exception as e:
+                            error_resp = {"error": str(e)}
+                            array_bytes = recv_exact(conn, header['data_size'])
+                            send_error_response(conn, command, error_resp)
+                            continue
+
+                    array_bytes = recv_exact(conn, header['data_size'])
+                    input_data = np.frombuffer(array_bytes, dtype=header['dtype'])
+                    input_data = input_data.reshape(header['shape'])
+                    request['input_data'] = input_data
+                    request['_slot_idx'] = client_tpu_idx
+                    if command == 'embedding':
+                        request['embedding_shape'] = header.get('embedding_shape', [1, 1280])
+
+                elif command == 'rescan_tpus':
+                    count = manager.rescan()
+                    response = json.dumps({
+                        "status": "ok",
+                        "tpu_count": count,
+                    }).encode('utf-8')
+                    conn.sendall(struct.pack('!I', len(response)) + response)
                     continue
 
-                # Check if our model was evicted from the slot
-                current_model = manager.get_slot_model(client_tpu_idx)
-                if current_model != client_model_path:
-                    # Re-route: find a slot for our model
-                    client_tpu_idx = manager.route(client_model_path)
-                    # Inject a load_model before the actual command
-                    load_req = {
-                        'command': 'load_model',
-                        'model_path': client_model_path,
-                        '_slot_idx': client_tpu_idx,
+                elif command == 'ping':
+                    request['_slot_idx'] = 0
+
+                # Determine which slot queue to use
+                if command == 'load_model':
+                    target_idx = tpu_idx
+                elif command in ('infer', 'detect', 'embedding'):
+                    target_idx = client_tpu_idx
+                elif command == 'ping':
+                    target_idx = 0
+                else:
+                    target_idx = 0
+
+                # Enqueue with backpressure
+                future = concurrent.futures.Future()
+                try:
+                    manager.slots[target_idx].queue.put((request, future), block=False)
+                except queue.Full:
+                    error_resp = {
+                        "error": "server_busy",
+                        "message": "Inference queue is full, try again later"
                     }
-                    load_future = concurrent.futures.Future()
-                    try:
-                        manager.slots[client_tpu_idx].queue.put(
-                            (load_req, load_future), block=False
-                        )
-                    except queue.Full:
-                        error_resp = json.dumps({
-                            "error": "server_busy",
-                            "message": "Inference queue is full, try again later"
-                        }).encode('utf-8')
-                        # Consume numpy data
-                        array_bytes = recv_exact(conn, header['data_size'])
-                        if command in ('infer', 'embedding'):
-                            conn.sendall(struct.pack('!I', 0))
-                            conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
-                        else:
-                            conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
-                        continue
-                    # Wait for reload
-                    try:
-                        load_future.result()
-                    except Exception as e:
-                        error_resp = json.dumps({"error": str(e)}).encode('utf-8')
-                        array_bytes = recv_exact(conn, header['data_size'])
-                        if command in ('infer', 'embedding'):
-                            conn.sendall(struct.pack('!I', 0))
-                            conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
-                        else:
-                            conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
-                        continue
+                    send_error_response(conn, command, error_resp)
+                    continue
 
-                array_bytes = recv_exact(conn, header['data_size'])
-                input_data = np.frombuffer(array_bytes, dtype=header['dtype'])
-                input_data = input_data.reshape(header['shape'])
-                request['input_data'] = input_data
-                request['_slot_idx'] = client_tpu_idx
-                if command == 'embedding':
-                    request['embedding_shape'] = header.get('embedding_shape', [1, 1280])
+                # Wait for worker to process
+                try:
+                    result = future.result()
+                except Exception as e:
+                    error_resp = {"error": str(e)}
+                    send_error_response(conn, command, error_resp)
+                    continue
 
-            elif command == 'rescan_tpus':
-                count = manager.rescan()
-                response = json.dumps({
-                    "status": "ok",
-                    "tpu_count": count,
-                }).encode('utf-8')
-                conn.sendall(struct.pack('!I', len(response)) + response)
-                continue
+                # For load_model: only commit client state after success
+                if command == 'load_model':
+                    if isinstance(result, dict) and result.get('status') in ('loaded', 'already_loaded'):
+                        client_model_path = model_path
+                        client_tpu_idx = tpu_idx
 
-            elif command == 'ping':
-                request['_slot_idx'] = 0
-
-            # Determine which slot queue to use
-            if command == 'load_model':
-                target_idx = client_tpu_idx
-            elif command in ('infer', 'detect', 'embedding'):
-                target_idx = client_tpu_idx
-            elif command == 'ping':
-                target_idx = 0
-            else:
-                target_idx = 0
-
-            # Enqueue with backpressure
-            future = concurrent.futures.Future()
-            try:
-                manager.slots[target_idx].queue.put((request, future), block=False)
-            except queue.Full:
-                error_resp = json.dumps({
-                    "error": "server_busy",
-                    "message": "Inference queue is full, try again later"
-                }).encode('utf-8')
-                if command in ('infer', 'embedding'):
-                    conn.sendall(struct.pack('!I', 0))  # 0 = JSON response
-                    conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
-                else:
-                    conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
-                continue
-
-            # Wait for worker to process
-            try:
-                result = future.result()
-            except Exception as e:
-                error_resp = json.dumps({"error": str(e)}).encode('utf-8')
-                if command in ('infer', 'embedding'):
-                    conn.sendall(struct.pack('!I', 0))
-                    conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
-                else:
-                    conn.sendall(struct.pack('!I', len(error_resp)) + error_resp)
-                continue
-
-            # Send response back using the same wire format as before
-            if command in ('load_model', 'ping', 'detect'):
-                response = json.dumps(result).encode('utf-8')
-                conn.sendall(struct.pack('!I', len(response)) + response)
-
-            elif command in ('infer', 'embedding'):
-                if isinstance(result, dict):  # Error
+                # Send response back using the same wire format as before
+                if command in ('load_model', 'ping', 'detect'):
                     response = json.dumps(result).encode('utf-8')
-                    conn.sendall(struct.pack('!I', 0))  # 0 = JSON response
                     conn.sendall(struct.pack('!I', len(response)) + response)
-                else:
-                    out_bytes = result.tobytes()
-                    out_header = json.dumps({
-                        'shape': result.shape,
-                        'dtype': str(result.dtype)
-                    }).encode('utf-8')
-                    conn.sendall(struct.pack('!I', len(out_bytes)))  # >0 = numpy
-                    conn.sendall(struct.pack('!I', len(out_header)) + out_header)
-                    conn.sendall(out_bytes)
 
-            else:
-                # Unknown command — worker already returned an error dict
-                response = json.dumps(result).encode('utf-8')
-                conn.sendall(struct.pack('!I', len(response)) + response)
+                elif command in ('infer', 'embedding'):
+                    if isinstance(result, dict):  # Error
+                        response = json.dumps(result).encode('utf-8')
+                        conn.sendall(struct.pack('!I', 0))  # 0 = JSON response
+                        conn.sendall(struct.pack('!I', len(response)) + response)
+                    else:
+                        out_bytes = result.tobytes()
+                        out_header = json.dumps({
+                            'shape': result.shape,
+                            'dtype': str(result.dtype)
+                        }).encode('utf-8')
+                        conn.sendall(struct.pack('!I', len(out_bytes)))  # >0 = numpy
+                        conn.sendall(struct.pack('!I', len(out_header)) + out_header)
+                        conn.sendall(out_bytes)
+
+                else:
+                    # Unknown command — worker already returned an error dict
+                    response = json.dumps(result).encode('utf-8')
+                    conn.sendall(struct.pack('!I', len(response)) + response)
+
+            except ConnectionError:
+                raise  # Re-raise so outer handler closes connection
+            except Exception as e:
+                # Unexpected error processing this request — send error, keep connection
+                try:
+                    send_error_response(conn, command, {
+                        "error": "internal_error",
+                        "message": str(e)
+                    })
+                except ConnectionError:
+                    raise
+                except Exception:
+                    pass  # Can't send error either, but don't kill the loop
 
     except ConnectionError:
         pass  # Client disconnected
