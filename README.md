@@ -76,7 +76,7 @@ Simpler, but modifies the system Python environment.
 
 ### What gets installed (both options)
 
-- `rpi_edgetpu` Python package (`EdgeTPUClient`, `EdgeTPUBusyError`)
+- `rpi_edgetpu` Python package (`EdgeTPUClient`, `EdgeTPUError`, `EdgeTPUBusyError`)
 - `edgetpu-cli` command-line tool
 - Dependency: `numpy` (already present on Trixie)
 
@@ -98,7 +98,7 @@ bash install.sh update
 
 ```python
 import numpy as np
-from rpi_edgetpu import EdgeTPUClient, EdgeTPUBusyError
+from rpi_edgetpu import EdgeTPUClient, EdgeTPUError, EdgeTPUBusyError
 
 # Connect to the running service
 client = EdgeTPUClient()
@@ -131,7 +131,7 @@ When multiple clients are active and the inference queue is full, methods raise 
 
 ```python
 import time
-from rpi_edgetpu import EdgeTPUClient, EdgeTPUBusyError
+from rpi_edgetpu import EdgeTPUClient, EdgeTPUError, EdgeTPUBusyError
 
 with EdgeTPUClient() as client:
     client.load_model("/path/to/model_edgetpu.tflite")
@@ -211,6 +211,7 @@ See the [`examples/`](examples/) directory for complete, annotated scripts:
 - [`picamera2_detection.py`](examples/picamera2_detection.py) — Live camera object detection with bounding boxes
 - [`picamera2_embedding.py`](examples/picamera2_embedding.py) — Live camera embedding extraction
 - [`picamera2_pose.py`](examples/picamera2_pose.py) — Live camera pose estimation with MoveNet
+- [`robust_inference.py`](examples/robust_inference.py) — Graceful error handling, TPU disconnect recovery, and reconnection
 - [`multi_client.py`](examples/multi_client.py) — Concurrent clients with multiple models and multi-TPU affinity routing
 
 ## Models
