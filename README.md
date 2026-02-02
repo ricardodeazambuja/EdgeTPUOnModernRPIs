@@ -231,6 +231,21 @@ The service venv uses [feranick's builds](https://github.com/feranick/TFlite-bui
 - `libedgetpu1-std` 16.0tf2.17.1 (deb)
 - `numpy < 2` (required by `tflite-runtime`)
 
+**Tested on**:
+
+```
+Raspberry Pi 4 Model B Rev 1.1
+Distributor ID:    Debian
+Description:    Debian GNU/Linux 13 (trixie)
+Release:    13
+Codename:    trixie
+Linux 6.12.62+rpt-rpi-v8 #1 SMP PREEMPT Debian 1:6.12.62-1+rpt1 (2025-12-18) aarch64 GNU/Linux
+
+               total
+Mem:           3.7Gi
+Swap:          2.0Gi
+```
+
 ## Training Your Own Models
 
 For a complete example of fine-tuning and deploying custom models on the Coral Edge TPU, see [Maple-Syrup-Pi-Camera](https://github.com/ricardodeazambuja/Maple-Syrup-Pi-Camera). That project targets an earlier Raspberry Pi (Pi Zero) but includes Jupyter notebooks that walk through the full training-to-Edge-TPU pipeline.
