@@ -217,10 +217,6 @@ See the [`examples/`](examples/) directory for complete, annotated scripts:
 
 Pre-compiled Edge TPU models are available at [EdgeTPUModelZoo](https://github.com/ricardodeazambuja/EdgeTPUModelZoo). Only models with `edgetpu` in their filename (e.g. `*_edgetpu.tflite`) are compiled for the Google Coral Edge TPU USB Accelerator and will work with this service. Other `.tflite` models in that repository are standard TFLite models that have not been compiled for the Edge TPU.
 
-## Manual Setup
-
-For advanced users who prefer manual control, see [INSTALL_PYENV.md](INSTALL_PYENV.md) for pyenv installation and [EDGETPU_SERVICE.md](EDGETPU_SERVICE.md) for the full service/client protocol reference.
-
 ## Requirements
 
 - Raspberry Pi with Raspberry Pi OS Trixie (64-bit / arm64)
