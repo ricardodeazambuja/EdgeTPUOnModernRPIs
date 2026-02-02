@@ -106,7 +106,12 @@ class EdgeTPUService:
     def load_model(self, model_path):
         """Load model onto Edge TPU. Call once, reuse forever."""
         if self.model_path == model_path and self.interpreter:
-            return {"status": "already_loaded"}
+            return {
+                "status": "already_loaded",
+                "input_shape": self.input_details[0]['shape'].tolist(),
+                "input_dtype": str(self.input_details[0]['dtype']),
+                "output_shape": self.output_details[0]['shape'].tolist()
+            }
 
         try:
             interpreter = tflite.Interpreter(
