@@ -1,6 +1,6 @@
 # rpi-edgetpu
 
-Client library and CLI for running [Coral Edge TPU](https://coral.ai/) inference on Raspberry Pi OS Trixie, where the system Python (3.13) is too new for `tflite-runtime`.
+Run [Google Coral Edge TPU](https://coral.ai/) models on Raspberry Pi OS Trixie without downgrading your system Python. This project provides a systemd inference service (Python 3.11 venv), a client library, and a one-command installer that bridges the gap between Trixie's Python 3.13 and tflite-runtime's 3.11 requirement. It automatically manages multiple Coral USB Accelerators, routes models across TPUs with affinity-based scheduling, and recovers gracefully from device failures.
 
 ## Architecture
 
