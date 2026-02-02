@@ -17,9 +17,9 @@ set -euo pipefail
 
 PYENV_PYTHON_VERSION="${PYENV_PYTHON_VERSION:-3.11.9}"
 CORAL_VENV="${CORAL_VENV:-$HOME/.coral-venv}"
-TFLITE_WHL_URL="https://github.com/feranick/TFlite-builds/releases/download/v2.17.1/tflite_runtime-2.17.1-cp311-cp311-linux_aarch64.whl"
-LIBEDGETPU_DEB_URL="https://github.com/feranick/libedgetpu/releases/download/16.0TF2.17.1-1/libedgetpu1-std_16.0tf2.17.1-1.trixie_arm64.deb"
-PYCORAL_WHL_URL="https://github.com/feranick/pycoral/releases/download/2.0.3TF2.17.1/pycoral-2.0.3-cp311-cp311-linux_aarch64.whl"
+TFLITE_WHL_URL="https://github.com/ricardodeazambuja/EdgeTPUOnModernRPIs/releases/download/2.17.1/tflite_runtime-2.17.1-cp311-cp311-linux_aarch64.whl"
+LIBEDGETPU_DEB_URL="https://github.com/ricardodeazambuja/EdgeTPUOnModernRPIs/releases/download/2.17.1/libedgetpu1-std_16.0tf2.17.1-1.trixie_arm64.deb"
+PYCORAL_WHL_URL="https://github.com/ricardodeazambuja/EdgeTPUOnModernRPIs/releases/download/2.17.1/pycoral-2.0.3-cp311-cp311-linux_aarch64.whl"
 CORAL_SERVICE_DIR="${CORAL_SERVICE_DIR:-$HOME/coral-service}"
 SERVICE_NAME="edgetpu"
 SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -628,7 +628,8 @@ step_apt_deps() {
     echo "  The following packages are needed to compile Python from source:"
     echo "    ${APT_PACKAGES[*]}"
     echo
-    echo "  libedgetpu1-std is installed from feranick's build (TF 2.17.1)."
+    echo "  libedgetpu1-std (TF 2.17.1, originally from feranick's build) is installed"
+    echo "  from our GitHub release."
     echo
     echo "  This requires sudo."
     echo
@@ -642,7 +643,7 @@ step_apt_deps() {
         fi
     done
 
-    # Check if feranick libedgetpu is installed at the right version
+    # Check if libedgetpu is installed at the right version
     local edgetpu_installed=false
     if dpkg -s libedgetpu1-std &>/dev/null; then
         local installed_ver
@@ -668,7 +669,7 @@ step_apt_deps() {
     fi
 
     if ! $edgetpu_installed; then
-        info "Installing feranick libedgetpu (TF 2.17.1)..."
+        info "Installing libedgetpu (TF 2.17.1)..."
         local tmp_deb="/tmp/libedgetpu1-std.deb"
         curl -fsSL -o "$tmp_deb" "$LIBEDGETPU_DEB_URL"
         sudo dpkg -i "$tmp_deb"
@@ -762,7 +763,7 @@ step_venv() {
     echo
     echo "  Creates ${CORAL_VENV} with Python ${PYENV_PYTHON_VERSION}."
     echo "  Installs tflite-runtime 2.17.1, pycoral 2.0.3, and numpy<2"
-    echo "  from feranick's builds."
+    echo "  from our GitHub release (originally feranick's builds)."
     echo
 
     local python_bin="${PYENV_ROOT}/versions/${PYENV_PYTHON_VERSION}/bin/python"
@@ -1002,7 +1003,7 @@ do_update() {
     fi
 
     # Upgrade libedgetpu deb
-    info "Upgrading libedgetpu (feranick TF 2.17.1)..."
+    info "Upgrading libedgetpu (TF 2.17.1)..."
     local tmp_deb="/tmp/libedgetpu1-std.deb"
     curl -fsSL -o "$tmp_deb" "$LIBEDGETPU_DEB_URL"
     sudo dpkg -i "$tmp_deb"

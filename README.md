@@ -224,7 +224,7 @@ Pre-compiled Edge TPU models are available at [EdgeTPUModelZoo](https://github.c
 - One or more Coral USB Accelerators (multiple TPUs are detected and used automatically)
 - System Python 3.13 with system-installed `numpy` and `picamera2` (pre-installed on Trixie)
 
-The service venv uses [feranick's builds](https://github.com/feranick/TFlite-builds) (TF 2.17.1-based), which fix segfaults with SSD detection models (`TFLite_Detection_PostProcess` custom op). These are installed automatically by `install.sh`:
+The service venv uses pre-built binaries based on [feranick's TFlite builds](https://github.com/feranick/TFlite-builds), [libedgetpu](https://github.com/feranick/libedgetpu), and [pycoral](https://github.com/feranick/pycoral) (TF 2.17.1), which fix segfaults with SSD detection models (`TFLite_Detection_PostProcess` custom op). These are mirrored on [our release](https://github.com/ricardodeazambuja/EdgeTPUOnModernRPIs/releases/tag/2.17.1) for reliability and installed automatically by `install.sh`:
 
 - `tflite-runtime` 2.17.1 (wheel)
 - `pycoral` 2.0.3 (wheel)
