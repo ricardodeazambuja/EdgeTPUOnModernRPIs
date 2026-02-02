@@ -234,6 +234,48 @@ The service venv uses [feranick's builds](https://github.com/feranick/TFlite-bui
 
 For a complete example of fine-tuning and deploying custom models on the Coral Edge TPU, see [Maple-Syrup-Pi-Camera](https://github.com/ricardodeazambuja/Maple-Syrup-Pi-Camera). That project targets an earlier Raspberry Pi (Pi Zero) but includes Jupyter notebooks that walk through the full training-to-Edge-TPU pipeline.
 
+## Developer Notes
+
+The service code lives in `src/rpi_edgetpu/service.py` but is also embedded as a heredoc inside `install.sh` (the `write_service_py()` function). This means `install.sh` is not a simple shell script — it carries a full copy of the service Python code so that `curl | bash` works without cloning the repo.
+
+**Every time you change `service.py`, you must regenerate `install.sh`:**
+
+```bash
+python scripts/sync_service.py
+```
+
+The sync script replaces the heredoc block between `SERVICEEOF` markers in `install.sh` with the current contents of `service.py`. Always commit both files together.
+
+### Repository layout
+
+```
+src/rpi_edgetpu/
+  service.py   ← source of truth for the Edge TPU service
+  client.py    ← client library (installed via pip)
+  cli.py       ← edgetpu-cli entry point
+scripts/
+  sync_service.py  ← keeps install.sh in sync with service.py
+install.sh     ← standalone installer (contains embedded service.py)
+examples/      ← annotated usage scripts
+```
+
+### Dual distribution
+
+The project ships two ways:
+
+1. **`install.sh`** — self-contained installer users download via curl. Sets up pyenv, Python 3.11, the venv, deploys the service, and configures systemd. The embedded service code makes this work without a git clone.
+2. **`pip install`** — installs the client library (`rpi_edgetpu`) and `edgetpu-cli` into the user's Python environment. This does *not* install the service itself.
+
+### Testing changes to the service
+
+After editing `service.py` and syncing, you can test locally on a Pi:
+
+```bash
+bash install.sh update
+```
+
+This re-deploys the service script and restarts the systemd unit.
+
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
