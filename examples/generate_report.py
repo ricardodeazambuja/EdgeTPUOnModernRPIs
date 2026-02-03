@@ -7,8 +7,8 @@ exercising the service, Python client, CLI, and multi-TPU routing. Output is a
 plain-text report suitable for copy-pasting into a GitHub issue.
 
 Usage:
-    python generate_report.py                  # print to stdout
-    python generate_report.py -o report.txt    # save to file
+    python generate_report.py                  # print + save to edgetpu_report.txt
+    python generate_report.py -o report.txt    # print + save to custom path
 """
 
 import argparse
@@ -619,6 +619,21 @@ def test_multi_tpu(results, tpu_count):
 # Report assembly
 # ---------------------------------------------------------------------------
 
+def _status_str(r):
+    if r.passed is None:
+        return "[SKIP]"
+    return "[PASS]" if r.passed else "[FAIL]"
+
+
+def _run_check(fn, *args, label=None):
+    """Run a check/test function, printing progress to stderr."""
+    name = label or fn.__name__.replace("_", " ").strip()
+    print(f"  Running: {name} ...", end="", flush=True, file=sys.stderr)
+    result = fn(*args)
+    print(f" {_status_str(result)}", file=sys.stderr)
+    return result
+
+
 def generate_report():
     """Run all checks and tests, return the report as a string."""
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -632,33 +647,35 @@ def generate_report():
         pass
 
     # --- Part 1: System checks ---
+    print("Running system checks ...", file=sys.stderr)
     system_checks = [
-        check_os(),
-        check_system_python(),
-        check_rpi_edgetpu_package(),
-        check_pyenv(),
-        check_coral_venv(),
-        check_libedgetpu(),
-        check_usb_devices(),
-        check_service_script(),
-        check_systemd_service(),
-        check_socket(),
-        check_model_download(),
-        check_cli_available(),
+        _run_check(check_os, label="OS / Kernel"),
+        _run_check(check_system_python, label="System Python"),
+        _run_check(check_rpi_edgetpu_package, label="rpi-edgetpu package"),
+        _run_check(check_pyenv, label="pyenv"),
+        _run_check(check_coral_venv, label="Coral venv"),
+        _run_check(check_libedgetpu, label="libedgetpu"),
+        _run_check(check_usb_devices, label="USB TPU devices"),
+        _run_check(check_service_script, label="Service script"),
+        _run_check(check_systemd_service, label="Systemd service"),
+        _run_check(check_socket, label="Socket file"),
+        _run_check(check_model_download, label="Test model download"),
+        _run_check(check_cli_available, label="edgetpu-cli available"),
     ]
 
     # --- Part 2: Integration tests ---
+    print("Running integration tests ...", file=sys.stderr)
     integration_tests = []
-    integration_tests.append(test_client_ping(system_checks))
-    integration_tests.append(test_client_load_model(system_checks))
-    integration_tests.append(test_client_inference(system_checks))
-    integration_tests.append(test_client_pipeline(system_checks))
-    integration_tests.append(test_client_already_loaded(system_checks))
-    rescan_result = test_client_rescan(system_checks)
+    integration_tests.append(_run_check(test_client_ping, system_checks, label="Python client: ping"))
+    integration_tests.append(_run_check(test_client_load_model, system_checks, label="Python client: load model"))
+    integration_tests.append(_run_check(test_client_inference, system_checks, label="Python client: inference"))
+    integration_tests.append(_run_check(test_client_pipeline, system_checks, label="Python client: pipeline"))
+    integration_tests.append(_run_check(test_client_already_loaded, system_checks, label="Python client: already_loaded"))
+    rescan_result = _run_check(test_client_rescan, system_checks, label="Python client: rescan TPUs")
     integration_tests.append(rescan_result)
-    integration_tests.append(test_cli_ping(system_checks))
-    integration_tests.append(test_cli_load_model(system_checks))
-    integration_tests.append(test_cli_infer(system_checks))
+    integration_tests.append(_run_check(test_cli_ping, system_checks, label="CLI: ping"))
+    integration_tests.append(_run_check(test_cli_load_model, system_checks, label="CLI: load-model"))
+    integration_tests.append(_run_check(test_cli_infer, system_checks, label="CLI: infer"))
 
     # Multi-TPU (conditional)
     tpu_count = 0
@@ -671,7 +688,7 @@ def generate_report():
                 tpu_count = int(m.group(1))
         except Exception:
             pass
-    multi_result = test_multi_tpu(system_checks, tpu_count)
+    multi_result = _run_check(test_multi_tpu, system_checks, tpu_count, label="Multi-TPU routing")
     integration_tests.append(multi_result)
 
     # --- Build report ---
@@ -690,18 +707,13 @@ def generate_report():
     # Summary
     lines.append("--- Summary " + "-" * 50)
 
-    def status_str(r):
-        if r.passed is None:
-            return "[SKIP]"
-        return "[PASS]" if r.passed else "[FAIL]"
-
     lines.append("  System Checks:")
     for r in system_checks:
-        lines.append(f"    {status_str(r)} {r.name}")
+        lines.append(f"    {_status_str(r)} {r.name}")
 
     lines.append("  Integration Tests:")
     for r in integration_tests:
-        lines.append(f"    {status_str(r)} {r.name}")
+        lines.append(f"    {_status_str(r)} {r.name}")
 
     counted = [r for r in all_results if r.passed is not None]
     passed_count = sum(1 for r in counted if r.passed)
@@ -712,7 +724,7 @@ def generate_report():
     # Detailed sections
     for i, r in enumerate(all_results, 1):
         lines.append(f"--- {i}. {r.name} {'-' * max(1, 52 - len(r.name) - len(str(i)))}")
-        lines.append(f"  Status: {status_str(r)}")
+        lines.append(f"  Status: {_status_str(r)}")
         if r.detail:
             lines.append(fmt_lines(redact_home(r.detail)))
         lines.append("")
@@ -730,19 +742,21 @@ def main():
     )
     parser.add_argument(
         "-o", "--output",
-        help="Save report to a file instead of printing to stdout",
+        help="Save report to this file (default: edgetpu_report.txt in current directory)",
     )
     args = parser.parse_args()
 
+    print("", file=sys.stderr)
     report = generate_report()
 
-    if args.output:
-        with open(args.output, "w") as f:
-            f.write(report)
-            f.write("\n")
-        print(f"Report saved to {args.output}")
-    else:
-        print(report)
+    output_path = args.output or "edgetpu_report.txt"
+    with open(output_path, "w") as f:
+        f.write(report)
+        f.write("\n")
+
+    print("", file=sys.stderr)
+    print(report)
+    print(f"\nReport saved to {output_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
