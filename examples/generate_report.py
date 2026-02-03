@@ -33,7 +33,7 @@ MODEL_URL = (
 MODEL_PATH = "/tmp/edgetpu_test_model.tflite"
 SOCKET_PATH = "/tmp/edgetpu.sock"
 
-CheckResult = namedtuple("CheckResult", ["name", "passed", "detail"])
+CheckResult = namedtuple("CheckResult", ["name", "passed", "detail", "description"], defaults=[""])
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -98,7 +98,8 @@ def check_os():
     lines.append(f"Arch: {platform.machine()}")
     lines.append(f"Kernel: {platform.release()}")
     lines.append(f"Hostname: {platform.node()}")
-    return CheckResult("OS / Kernel", True, "\n".join(lines))
+    return CheckResult("OS / Kernel", True, "\n".join(lines),
+                       "Identify the OS, architecture, and kernel to confirm this is a supported Raspberry Pi environment")
 
 
 def check_system_python():
@@ -110,7 +111,8 @@ def check_system_python():
     )
     if not passed:
         detail += "\n(requires >= 3.9)"
-    return CheckResult("System Python", passed, detail)
+    return CheckResult("System Python", passed, detail,
+                       "Verify the system Python is >= 3.9 (required by the client library)")
 
 
 def check_rpi_edgetpu_package():
@@ -130,7 +132,8 @@ def check_rpi_edgetpu_package():
         lines.append(f"numpy: IMPORT FAILED ({e})")
         passed = False
 
-    return CheckResult("rpi-edgetpu package", passed, "\n".join(lines))
+    return CheckResult("rpi-edgetpu package", passed, "\n".join(lines),
+                       "Confirm the rpi-edgetpu client library and numpy are importable")
 
 
 def check_pyenv():
@@ -149,10 +152,12 @@ def check_pyenv():
         lines.append("pyenv binary: NOT FOUND")
 
     passed = exists and rc == 0
-    return CheckResult("pyenv", passed, "\n".join(lines))
+    return CheckResult("pyenv", passed, "\n".join(lines),
+                       "Check that pyenv is installed (needed to build the Python 3.11 venv for the service)")
 
 
 def check_coral_venv():
+    _desc = "Verify the Python 3.11 venv exists with tflite-runtime, pycoral, and numpy"
     lines = []
     venv_dir = os.environ.get("CORAL_VENV", "")
     if not venv_dir:
@@ -163,7 +168,7 @@ def check_coral_venv():
     lines.append(f"Venv dir: {redact_home(venv_dir)} ({'exists' if exists else 'NOT FOUND'})")
 
     if not exists:
-        return CheckResult("Coral venv", False, "\n".join(lines))
+        return CheckResult("Coral venv", False, "\n".join(lines), _desc)
 
     venv_python = venv_path / "bin" / "python"
     rc, out, _ = run_cmd([str(venv_python), "--version"])
@@ -171,7 +176,7 @@ def check_coral_venv():
         lines.append(f"Venv Python: {out.strip()}")
     else:
         lines.append("Venv Python: FAILED to run")
-        return CheckResult("Coral venv", False, "\n".join(lines))
+        return CheckResult("Coral venv", False, "\n".join(lines), _desc)
 
     rc, out, _ = run_cmd([str(venv_path / "bin" / "pip"), "freeze"])
     if rc == 0:
@@ -184,22 +189,24 @@ def check_coral_venv():
     else:
         lines.append("pip freeze: FAILED")
 
-    return CheckResult("Coral venv", True, "\n".join(lines))
+    return CheckResult("Coral venv", True, "\n".join(lines), _desc)
 
 
 def check_libedgetpu():
+    _desc = "Confirm the libedgetpu shared library is installed via dpkg"
     rc, out, err = run_cmd(["dpkg", "-s", "libedgetpu1-std"])
     if rc == 0:
         version_lines = [l for l in out.splitlines() if l.startswith("Version:")]
         detail = version_lines[0] if version_lines else "installed"
-        return CheckResult("libedgetpu", True, detail)
-    return CheckResult("libedgetpu", False, "libedgetpu1-std not installed")
+        return CheckResult("libedgetpu", True, detail, _desc)
+    return CheckResult("libedgetpu", False, "libedgetpu1-std not installed", _desc)
 
 
 def check_usb_devices():
+    _desc = "Scan USB bus for Coral TPU devices (vendor IDs 1a6e/18d1)"
     rc, out, _ = run_cmd(["lsusb"])
     if rc != 0:
-        return CheckResult("USB TPU devices", False, "lsusb command failed")
+        return CheckResult("USB TPU devices", False, "lsusb command failed", _desc)
 
     tpu_lines = [
         l for l in out.splitlines()
@@ -207,11 +214,12 @@ def check_usb_devices():
     ]
     if tpu_lines:
         detail = f"Found {len(tpu_lines)} TPU device(s):\n" + "\n".join(f"  {l.strip()}" for l in tpu_lines)
-        return CheckResult("USB TPU devices", True, detail)
-    return CheckResult("USB TPU devices", False, "No Coral USB devices found (vendor 1a6e/18d1)")
+        return CheckResult("USB TPU devices", True, detail, _desc)
+    return CheckResult("USB TPU devices", False, "No Coral USB devices found (vendor 1a6e/18d1)", _desc)
 
 
 def check_service_script():
+    _desc = "Locate the deployed edgetpu_service.py file on disk"
     candidates = []
     service_dir = os.environ.get("CORAL_SERVICE_DIR", "")
     if service_dir:
@@ -221,10 +229,10 @@ def check_service_script():
     for p in candidates:
         if p.exists():
             detail = f"Found: {redact_home(str(p))} ({p.stat().st_size} bytes)"
-            return CheckResult("Service script", True, detail)
+            return CheckResult("Service script", True, detail, _desc)
 
     searched = ", ".join(redact_home(str(p.parent)) for p in candidates)
-    return CheckResult("Service script", False, f"Not found in: {searched}")
+    return CheckResult("Service script", False, f"Not found in: {searched}", _desc)
 
 
 def check_systemd_service():
@@ -252,38 +260,42 @@ def check_systemd_service():
         else:
             lines.append("  (could not read journal)")
 
-    return CheckResult("Systemd service", is_active, "\n".join(lines))
+    return CheckResult("Systemd service", is_active, "\n".join(lines),
+                       "Check that the edgetpu systemd unit is active and enabled")
 
 
 def check_socket():
+    _desc = "Verify the Unix socket /tmp/edgetpu.sock exists and has correct permissions"
     sock_path = pathlib.Path(SOCKET_PATH)
     if not sock_path.exists():
-        return CheckResult("Socket file", False, f"{SOCKET_PATH} does not exist")
+        return CheckResult("Socket file", False, f"{SOCKET_PATH} does not exist", _desc)
 
     try:
         st = sock_path.stat()
         is_socket = stat.S_ISSOCK(st.st_mode)
         perms = oct(st.st_mode)[-3:]
         detail = f"{SOCKET_PATH} (socket={is_socket}, perms={perms})"
-        return CheckResult("Socket file", is_socket, detail)
+        return CheckResult("Socket file", is_socket, detail, _desc)
     except Exception as e:
-        return CheckResult("Socket file", False, str(e))
+        return CheckResult("Socket file", False, str(e), _desc)
 
 
 def check_model_download():
     ok, detail = download_model(MODEL_URL, MODEL_PATH)
-    return CheckResult("Test model download", ok, detail)
+    return CheckResult("Test model download", ok, detail,
+                       "Download (or use cached) MobileNetV2 test model for integration tests")
 
 
 def check_cli_available():
+    _desc = "Check that the edgetpu-cli command is on PATH or callable as a module"
     path = shutil.which("edgetpu-cli")
     if path:
-        return CheckResult("edgetpu-cli available", True, f"Found: {redact_home(path)}")
+        return CheckResult("edgetpu-cli available", True, f"Found: {redact_home(path)}", _desc)
     # Try module invocation
     rc, out, _ = run_cmd([sys.executable, "-m", "rpi_edgetpu.cli", "--help"])
     if rc == 0:
-        return CheckResult("edgetpu-cli available", True, f"Available via: {sys.executable} -m rpi_edgetpu.cli")
-    return CheckResult("edgetpu-cli available", False, "Not found on PATH and module invocation failed")
+        return CheckResult("edgetpu-cli available", True, f"Available via: {sys.executable} -m rpi_edgetpu.cli", _desc)
+    return CheckResult("edgetpu-cli available", False, "Not found on PATH and module invocation failed", _desc)
 
 
 # ---------------------------------------------------------------------------
@@ -309,9 +321,10 @@ def _model_prereq(results):
 
 
 def test_client_ping(results):
+    _desc = "Connect to the service and verify it responds with status ok and its version"
     skip = _service_prereq(results)
     if skip:
-        return CheckResult("Python client: ping", False, f"SKIPPED — {skip}")
+        return CheckResult("Python client: ping", False, f"SKIPPED — {skip}", _desc)
     try:
         from rpi_edgetpu import EdgeTPUClient
         t0 = time.monotonic()
@@ -322,15 +335,16 @@ def test_client_ping(results):
         ok = isinstance(resp, dict) and resp.get("status") == "ok"
         version = resp.get("version", "N/A")
         detail = f"Response: {resp}\nService version: {version}\nRTT: {rtt_ms:.1f} ms"
-        return CheckResult("Python client: ping", ok, detail)
+        return CheckResult("Python client: ping", ok, detail, _desc)
     except Exception as e:
-        return CheckResult("Python client: ping", False, str(e))
+        return CheckResult("Python client: ping", False, str(e), _desc)
 
 
 def test_client_load_model(results):
+    _desc = "Load a model onto a TPU and verify input/output metadata is returned"
     skip = _service_prereq(results) or _model_prereq(results)
     if skip:
-        return CheckResult("Python client: load model", False, f"SKIPPED — {skip}")
+        return CheckResult("Python client: load model", False, f"SKIPPED — {skip}", _desc)
     try:
         from rpi_edgetpu import EdgeTPUClient
         client = EdgeTPUClient()
@@ -340,15 +354,16 @@ def test_client_load_model(results):
         for key in ("input_shape", "input_dtype", "output_shape"):
             lines.append(f"  {key}: {resp.get(key)}")
         client.close()
-        return CheckResult("Python client: load model", ok, "\n".join(lines))
+        return CheckResult("Python client: load model", ok, "\n".join(lines), _desc)
     except Exception as e:
-        return CheckResult("Python client: load model", False, str(e))
+        return CheckResult("Python client: load model", False, str(e), _desc)
 
 
 def test_client_inference(results):
+    _desc = "Run a full inference round-trip and verify output shape, dtype, and latency"
     skip = _service_prereq(results) or _model_prereq(results)
     if skip:
-        return CheckResult("Python client: inference", False, f"SKIPPED — {skip}")
+        return CheckResult("Python client: inference", False, f"SKIPPED — {skip}", _desc)
     try:
         import numpy as np
         from rpi_edgetpu import EdgeTPUClient
@@ -386,15 +401,16 @@ def test_client_inference(results):
         ok = isinstance(output, np.ndarray) and shape_ok
         if not shape_ok:
             lines.append(f"Shape mismatch: expected {expected_shape}, got {list(output.shape)}")
-        return CheckResult("Python client: inference", ok, "\n".join(lines))
+        return CheckResult("Python client: inference", ok, "\n".join(lines), _desc)
     except Exception as e:
-        return CheckResult("Python client: inference", False, str(e))
+        return CheckResult("Python client: inference", False, str(e), _desc)
 
 
 def test_client_pipeline(results):
+    _desc = "Verify the pipeline error path by chaining a model with incompatible shapes"
     skip = _service_prereq(results) or _model_prereq(results)
     if skip:
-        return CheckResult("Python client: pipeline", False, f"SKIPPED — {skip}")
+        return CheckResult("Python client: pipeline", False, f"SKIPPED — {skip}", _desc)
     try:
         import numpy as np
         from rpi_edgetpu import EdgeTPUClient
@@ -414,7 +430,8 @@ def test_client_pipeline(results):
             client.close()
             return CheckResult(
                 "Python client: pipeline", True,
-                "Pipeline succeeded (unexpected — model may accept its own output)"
+                "Pipeline succeeded (unexpected — model may accept its own output)",
+                _desc
             )
         except Exception as e:
             msg = str(e)
@@ -424,15 +441,16 @@ def test_client_pipeline(results):
             # The client prefixes the message with "pipeline stage N".
             ok = "stage" in msg.lower() or "pipeline" in msg.lower()
             detail = f"Expected error at stage 1: {msg}"
-            return CheckResult("Python client: pipeline", ok, detail)
+            return CheckResult("Python client: pipeline", ok, detail, _desc)
     except Exception as e:
-        return CheckResult("Python client: pipeline", False, str(e))
+        return CheckResult("Python client: pipeline", False, str(e), _desc)
 
 
 def test_client_already_loaded(results):
+    _desc = "Load the same model twice and verify the server returns already_loaded with identical metadata"
     skip = _service_prereq(results) or _model_prereq(results)
     if skip:
-        return CheckResult("Python client: already_loaded", False, f"SKIPPED — {skip}")
+        return CheckResult("Python client: already_loaded", False, f"SKIPPED — {skip}", _desc)
     try:
         from rpi_edgetpu import EdgeTPUClient
 
@@ -455,15 +473,16 @@ def test_client_already_loaded(results):
             lines.append(f"  {key}: {'match' if same else 'MISMATCH'} ({v2})")
 
         ok = ok and match
-        return CheckResult("Python client: already_loaded", ok, "\n".join(lines))
+        return CheckResult("Python client: already_loaded", ok, "\n".join(lines), _desc)
     except Exception as e:
-        return CheckResult("Python client: already_loaded", False, str(e))
+        return CheckResult("Python client: already_loaded", False, str(e), _desc)
 
 
 def test_client_rescan(results):
+    _desc = "Ask the service to re-probe for TPU devices and report the count"
     skip = _service_prereq(results)
     if skip:
-        return CheckResult("Python client: rescan TPUs", False, f"SKIPPED — {skip}")
+        return CheckResult("Python client: rescan TPUs", False, f"SKIPPED — {skip}", _desc)
     try:
         from rpi_edgetpu import EdgeTPUClient
         client = EdgeTPUClient()
@@ -471,9 +490,9 @@ def test_client_rescan(results):
         client.close()
         tpu_count = resp.get("tpu_count", 0)
         ok = isinstance(resp, dict) and tpu_count >= 1
-        return CheckResult("Python client: rescan TPUs", ok, f"Response: {resp}")
+        return CheckResult("Python client: rescan TPUs", ok, f"Response: {resp}", _desc)
     except Exception as e:
-        return CheckResult("Python client: rescan TPUs", False, str(e))
+        return CheckResult("Python client: rescan TPUs", False, str(e), _desc)
 
 
 def _cli_cmd():
@@ -485,9 +504,10 @@ def _cli_cmd():
 
 
 def test_cli_ping(results):
+    _desc = "Exercise the edgetpu-cli ping subcommand end-to-end"
     skip = _service_prereq(results)
     if skip:
-        return CheckResult("CLI: ping", False, f"SKIPPED — {skip}")
+        return CheckResult("CLI: ping", False, f"SKIPPED — {skip}", _desc)
     try:
         cmd = _cli_cmd() + ["--json", "ping"]
         rc, out, err = run_cmd(cmd)
@@ -499,15 +519,16 @@ def test_cli_ping(results):
         else:
             lines.append(f"stderr: {err.strip()}")
             ok = False
-        return CheckResult("CLI: ping", ok, "\n".join(lines))
+        return CheckResult("CLI: ping", ok, "\n".join(lines), _desc)
     except Exception as e:
-        return CheckResult("CLI: ping", False, str(e))
+        return CheckResult("CLI: ping", False, str(e), _desc)
 
 
 def test_cli_load_model(results):
+    _desc = "Exercise the edgetpu-cli load-model subcommand end-to-end"
     skip = _service_prereq(results) or _model_prereq(results)
     if skip:
-        return CheckResult("CLI: load-model", False, f"SKIPPED — {skip}")
+        return CheckResult("CLI: load-model", False, f"SKIPPED — {skip}", _desc)
     try:
         cmd = _cli_cmd() + ["--json", "load-model", MODEL_PATH]
         rc, out, err = run_cmd(cmd)
@@ -519,15 +540,16 @@ def test_cli_load_model(results):
         else:
             lines.append(f"stderr: {err.strip()}")
             ok = False
-        return CheckResult("CLI: load-model", ok, "\n".join(lines))
+        return CheckResult("CLI: load-model", ok, "\n".join(lines), _desc)
     except Exception as e:
-        return CheckResult("CLI: load-model", False, str(e))
+        return CheckResult("CLI: load-model", False, str(e), _desc)
 
 
 def test_cli_infer(results):
+    _desc = "Exercise the edgetpu-cli infer subcommand with .npy file I/O"
     skip = _service_prereq(results) or _model_prereq(results)
     if skip:
-        return CheckResult("CLI: infer", False, f"SKIPPED — {skip}")
+        return CheckResult("CLI: infer", False, f"SKIPPED — {skip}", _desc)
     try:
         import numpy as np
 
@@ -566,21 +588,25 @@ def test_cli_infer(results):
             lines.append(f"Output shape: {list(arr.shape)}, dtype: {arr.dtype}")
 
         ok = rc == 0 and output_exists
-        return CheckResult("CLI: infer", ok, "\n".join(lines))
+        return CheckResult("CLI: infer", ok, "\n".join(lines),
+                           "Exercise the edgetpu-cli infer subcommand with .npy file I/O")
     except Exception as e:
-        return CheckResult("CLI: infer", False, str(e))
+        return CheckResult("CLI: infer", False, str(e),
+                           "Exercise the edgetpu-cli infer subcommand with .npy file I/O")
 
 
 def test_multi_tpu(results, tpu_count):
+    _desc = "With >= 2 TPUs, verify two independent clients can infer concurrently"
     if tpu_count < 2:
         return CheckResult(
             "Multi-TPU routing", None,
-            f"SKIPPED — only {tpu_count} TPU(s) detected (need >= 2)"
+            f"SKIPPED — only {tpu_count} TPU(s) detected (need >= 2)",
+            _desc
         )
 
     skip = _service_prereq(results) or _model_prereq(results)
     if skip:
-        return CheckResult("Multi-TPU routing", False, f"SKIPPED — {skip}")
+        return CheckResult("Multi-TPU routing", False, f"SKIPPED — {skip}", _desc)
 
     try:
         import numpy as np
@@ -613,9 +639,9 @@ def test_multi_tpu(results, tpu_count):
         client_b.close()
 
         ok = isinstance(out_a, np.ndarray) and isinstance(out_b, np.ndarray)
-        return CheckResult("Multi-TPU routing", ok, "\n".join(lines))
+        return CheckResult("Multi-TPU routing", ok, "\n".join(lines), _desc)
     except Exception as e:
-        return CheckResult("Multi-TPU routing", False, str(e))
+        return CheckResult("Multi-TPU routing", False, str(e), _desc)
 
 
 # ---------------------------------------------------------------------------
@@ -740,6 +766,8 @@ def generate_report():
     # Detailed sections
     for i, r in enumerate(all_results, 1):
         lines.append(f"--- {i}. {r.name} {'-' * max(1, 52 - len(r.name) - len(str(i)))}")
+        if r.description:
+            lines.append(f"  {r.description}")
         lines.append(f"  Status: {_status_str(r)}")
         if r.detail:
             lines.append(fmt_lines(redact_home(r.detail)))
