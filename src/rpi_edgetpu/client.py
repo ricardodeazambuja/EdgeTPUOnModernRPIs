@@ -12,8 +12,16 @@ SOCKET_PATH = "/tmp/edgetpu.sock"
 
 
 class EdgeTPUError(Exception):
-    """Raised when the service reports an error (bad model, no TPU, etc.)."""
-    pass
+    """Raised when the service reports an error (bad model, no TPU, etc.).
+
+    Attributes:
+        error_dict: The full error dict returned by the service, e.g.
+            {'error': 'pipeline_stage_failed', 'stage': 1, 'message': '...'}
+    """
+
+    def __init__(self, message, error_dict=None):
+        super().__init__(message)
+        self.error_dict = error_dict or {}
 
 
 class EdgeTPUBusyError(EdgeTPUError):
@@ -73,8 +81,17 @@ class EdgeTPUClient:
         result = json.loads(self._recv_exact(resp_len).decode('utf-8'))
         if isinstance(result, dict) and 'error' in result:
             if result['error'] == 'server_busy':
-                raise EdgeTPUBusyError(result.get('message', 'Server busy'))
-            raise EdgeTPUError(result.get('message', result['error']))
+                raise EdgeTPUBusyError(
+                    result.get('message', 'Server busy'), result
+                )
+            msg = result.get('message', result['error'])
+            error_type = result.get('error', '')
+            # Include stage context for pipeline errors
+            if 'stage' in result:
+                msg = f"pipeline stage {result['stage']} ({result.get('model', '?')}): {msg}"
+            elif error_type != msg and error_type:
+                msg = f"{error_type}: {msg}"
+            raise EdgeTPUError(msg, result)
         return result
 
     def _recv_array_response(self):

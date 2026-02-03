@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rpi-edgetpu"
-version = "0.3.0"
+version = "0.3.1"
 description = "Client library and setup CLI for Coral Edge TPU on modern Raspberry Pi OS"
 readme = "README.md"
 license = {text = "MIT"}

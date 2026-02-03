@@ -25,7 +25,7 @@ CLIENT_TIMEOUT = 60.0
 FUTURE_TIMEOUT = 60.0
 MAX_DATA_SIZE = 100 * 1024 * 1024  # 100 MB
 ALLOWED_DTYPES = frozenset(["uint8", "int8", "float32", "float64", "int32", "int64"])
-SERVICE_VERSION = "0.3.0"
+SERVICE_VERSION = "0.3.1"
 
 # Exception strings that indicate a TPU hardware error (device disconnected, etc.)
 _TPU_DEVICE_ERROR_SUBSTRINGS = (

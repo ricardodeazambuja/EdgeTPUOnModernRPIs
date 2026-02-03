@@ -419,11 +419,10 @@ def test_client_pipeline(results):
         except Exception as e:
             msg = str(e)
             client.close()
-            # The pipeline should fail because the first model's output
-            # shape [1, 1001] doesn't match the second model's input
-            # shape [1, 224, 224, 3].  Any exception here means the
-            # error path works correctly.
-            ok = "mismatch" in msg.lower() or "stage" in msg.lower() or "pipeline" in msg.lower()
+            # The pipeline should fail at stage 1 because the first
+            # model's output [1, 1001] doesn't match input [1, 224, 224, 3].
+            # The client prefixes the message with "pipeline stage N".
+            ok = "stage" in msg.lower() or "pipeline" in msg.lower()
             detail = f"Expected error at stage 1: {msg}"
             return CheckResult("Python client: pipeline", ok, detail)
     except Exception as e:
