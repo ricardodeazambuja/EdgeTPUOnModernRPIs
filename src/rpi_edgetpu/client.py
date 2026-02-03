@@ -46,15 +46,21 @@ class EdgeTPUClient:
     def _connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.connect(self.socket_path)
+        self.sock.settimeout(30.0)
 
     def _recv_exact(self, n):
-        data = b''
-        while len(data) < n:
-            chunk = self.sock.recv(n - len(data))
-            if not chunk:
-                raise ConnectionError("Socket closed")
-            data += chunk
-        return data
+        buf = bytearray(n)
+        view = memoryview(buf)
+        pos = 0
+        try:
+            while pos < n:
+                nbytes = self.sock.recv_into(view[pos:])
+                if nbytes == 0:
+                    raise ConnectionError("Socket closed")
+                pos += nbytes
+        except socket.timeout:
+            raise EdgeTPUError("Operation timed out")
+        return bytes(buf)
 
     def _send_command(self, header, data=None):
         header_bytes = json.dumps(header).encode('utf-8')
@@ -113,13 +119,13 @@ class EdgeTPUClient:
         Returns:
             numpy array of model output
         """
-        data = input_array.tobytes()
+        input_array = np.ascontiguousarray(input_array)
         self._send_command({
             'command': 'infer',
             'shape': list(input_array.shape),
             'dtype': str(input_array.dtype),
-            'data_size': len(data)
-        }, data)
+            'data_size': input_array.nbytes
+        }, input_array)
         return self._recv_array_response()
 
     def detect(self, input_array, score_threshold=0.5, top_k=25):
@@ -137,13 +143,13 @@ class EdgeTPUClient:
         Returns:
             list of dicts with keys: class_id, score, bbox (ymin, xmin, ymax, xmax)
         """
-        data = input_array.tobytes()
+        input_array = np.ascontiguousarray(input_array)
         self._send_command({
             'command': 'detect',
             'shape': list(input_array.shape),
             'dtype': str(input_array.dtype),
-            'data_size': len(data)
-        }, data)
+            'data_size': input_array.nbytes
+        }, input_array)
         result = self._recv_json()
 
         num_outputs = result.get('num_outputs', 0)
@@ -190,14 +196,14 @@ class EdgeTPUClient:
         if embedding_shape is None:
             embedding_shape = [1, 1280]
 
-        data = input_array.tobytes()
+        input_array = np.ascontiguousarray(input_array)
         self._send_command({
             'command': 'embedding',
             'shape': list(input_array.shape),
             'dtype': str(input_array.dtype),
-            'data_size': len(data),
+            'data_size': input_array.nbytes,
             'embedding_shape': embedding_shape
-        }, data)
+        }, input_array)
         return self._recv_array_response()
 
     def rescan_tpus(self):

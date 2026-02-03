@@ -19,5 +19,3 @@ edgetpu-cli = "rpi_edgetpu.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.package-data]
-rpi_edgetpu = ["templates/*"]

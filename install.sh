@@ -80,6 +80,11 @@ import tflite_runtime.interpreter as tflite
 
 SOCKET_PATH = "/tmp/edgetpu.sock"
 MAX_QUEUE_SIZE = 16
+MAX_CLIENTS = 16
+CLIENT_TIMEOUT = 60.0
+FUTURE_TIMEOUT = 60.0
+MAX_DATA_SIZE = 100 * 1024 * 1024  # 100 MB
+ALLOWED_DTYPES = frozenset(["uint8", "int8", "float32", "float64", "int32", "int64"])
 
 # Exception strings that indicate a TPU hardware error (device disconnected, etc.)
 _TPU_DEVICE_ERROR_SUBSTRINGS = (
@@ -315,6 +320,28 @@ class TPUManager:
         with self.lock:
             return self.slots[idx].model_path
 
+    def check_and_route(self, current_idx, expected_model):
+        """Atomically check if model is still on slot; re-route if evicted.
+
+        Returns (tpu_idx, needs_reload) under lock so no TOCTOU race.
+        """
+        with self.lock:
+            slot = self.slots[current_idx]
+            if slot.alive and slot.model_path == expected_model:
+                return current_idx, False
+            # Model was evicted or slot died — re-route
+            alive_slots = [(i, s) for i, s in enumerate(self.slots) if s.alive]
+            if not alive_slots:
+                raise RuntimeError("No TPU devices available")
+            for i, s in alive_slots:
+                if s.model_path == expected_model:
+                    return i, False
+            for i, s in alive_slots:
+                if s.model_path is None:
+                    return i, True
+            lru_idx = min(alive_slots, key=lambda x: x[1].last_used)[0]
+            return lru_idx, True
+
     def slot_count(self):
         """Return number of alive slots."""
         with self.lock:
@@ -332,19 +359,23 @@ def probe_tpu_devices():
             indices.append(i)
             del delegate
         except (ValueError, RuntimeError):
-            break
-    return indices if indices else [0]
+            continue
+    if not indices:
+        raise RuntimeError("No Edge TPU devices found")
+    return indices
 
 
 def recv_exact(sock, n):
     """Receive exactly n bytes."""
-    data = b''
-    while len(data) < n:
-        chunk = sock.recv(n - len(data))
-        if not chunk:
+    buf = bytearray(n)
+    view = memoryview(buf)
+    pos = 0
+    while pos < n:
+        nbytes = sock.recv_into(view[pos:])
+        if nbytes == 0:
             raise ConnectionError("Socket closed")
-        data += chunk
-    return data
+        pos += nbytes
+    return bytes(buf)
 
 
 def _looks_like_device_error(exc):
@@ -416,10 +447,29 @@ def inference_worker(slot, manager):
             slot.queue.task_done()
 
 
+def _validate_array_header(header):
+    """Validate data_size, dtype, and shape from client header. Raises ValueError."""
+    data_size = header.get('data_size', 0)
+    if not isinstance(data_size, int) or data_size <= 0 or data_size > MAX_DATA_SIZE:
+        raise ValueError(f"Invalid data_size: {data_size} (max {MAX_DATA_SIZE})")
+    dtype_str = header.get('dtype', '')
+    if dtype_str not in ALLOWED_DTYPES:
+        raise ValueError(f"Invalid dtype: {dtype_str!r}")
+    shape = header.get('shape')
+    if not isinstance(shape, list) or not all(isinstance(d, int) and d > 0 for d in shape):
+        raise ValueError(f"Invalid shape: {shape!r}")
+    expected = int(np.prod(shape)) * np.dtype(dtype_str).itemsize
+    if data_size != expected:
+        raise ValueError(
+            f"data_size {data_size} does not match shape {shape} * dtype {dtype_str} = {expected}"
+        )
+
+
 def handle_client(conn, manager):
     """Handle one client connection (persistent). Routes requests to TPU slots."""
     client_model_path = None
     client_tpu_idx = None
+    conn.settimeout(CLIENT_TIMEOUT)
 
     try:
         while True:
@@ -447,21 +497,24 @@ def handle_client(conn, manager):
                     request['_slot_idx'] = tpu_idx
 
                 elif command in ('infer', 'detect', 'embedding'):
+                    # Validate input array metadata (before consuming bytes)
+                    _validate_array_header(header)
+
                     if client_model_path is None:
                         error_resp = {
                             "error": "no_model",
                             "message": "Call load_model before inference"
                         }
                         # Consume the numpy data from socket first
-                        array_bytes = recv_exact(conn, header['data_size'])
+                        recv_exact(conn, header['data_size'])
                         send_error_response(conn, command, error_resp)
                         continue
 
-                    # Check if our model was evicted from the slot
-                    current_model = manager.get_slot_model(client_tpu_idx)
-                    if current_model != client_model_path:
-                        # Re-route: find a slot for our model
-                        client_tpu_idx = manager.route(client_model_path)
+                    # Atomically check if model still on slot, re-route if evicted
+                    client_tpu_idx, needs_reload = manager.check_and_route(
+                        client_tpu_idx, client_model_path
+                    )
+                    if needs_reload:
                         # Inject a load_model before the actual command
                         load_req = {
                             'command': 'load_model',
@@ -479,15 +532,23 @@ def handle_client(conn, manager):
                                 "message": "Inference queue is full, try again later"
                             }
                             # Consume numpy data
-                            array_bytes = recv_exact(conn, header['data_size'])
+                            recv_exact(conn, header['data_size'])
                             send_error_response(conn, command, error_resp)
                             continue
                         # Wait for reload
                         try:
-                            load_future.result()
+                            load_future.result(timeout=FUTURE_TIMEOUT)
+                        except TimeoutError:
+                            manager.mark_slot_dead(manager.slots[client_tpu_idx])
+                            recv_exact(conn, header['data_size'])
+                            send_error_response(conn, command, {
+                                "error": "timeout",
+                                "message": "TPU operation timed out"
+                            })
+                            continue
                         except Exception as e:
                             error_resp = {"error": str(e)}
-                            array_bytes = recv_exact(conn, header['data_size'])
+                            recv_exact(conn, header['data_size'])
                             send_error_response(conn, command, error_resp)
                             continue
 
@@ -533,9 +594,18 @@ def handle_client(conn, manager):
                     send_error_response(conn, command, error_resp)
                     continue
 
-                # Wait for worker to process
+                # Wait for worker to process (with timeout)
                 try:
-                    result = future.result()
+                    result = future.result(timeout=FUTURE_TIMEOUT)
+                except TimeoutError:
+                    print(f"TPU operation timed out for command={command}")
+                    manager.mark_slot_dead(manager.slots[target_idx])
+                    error_resp = {
+                        "error": "timeout",
+                        "message": "TPU operation timed out"
+                    }
+                    send_error_response(conn, command, error_resp)
+                    continue
                 except Exception as e:
                     error_resp = {"error": str(e)}
                     send_error_response(conn, command, error_resp)
@@ -558,14 +628,14 @@ def handle_client(conn, manager):
                         conn.sendall(struct.pack('!I', 0))  # 0 = JSON response
                         conn.sendall(struct.pack('!I', len(response)) + response)
                     else:
-                        out_bytes = result.tobytes()
+                        result = np.ascontiguousarray(result)
                         out_header = json.dumps({
-                            'shape': result.shape,
+                            'shape': list(result.shape),
                             'dtype': str(result.dtype)
                         }).encode('utf-8')
-                        conn.sendall(struct.pack('!I', len(out_bytes)))  # >0 = numpy
+                        conn.sendall(struct.pack('!I', result.nbytes))  # >0 = numpy
                         conn.sendall(struct.pack('!I', len(out_header)) + out_header)
-                        conn.sendall(out_bytes)
+                        conn.sendall(result)
 
                 else:
                     # Unknown command — worker already returned an error dict
@@ -574,6 +644,18 @@ def handle_client(conn, manager):
 
             except ConnectionError:
                 raise  # Re-raise so outer handler closes connection
+            except (socket.timeout, TimeoutError):
+                break  # Client timed out, close connection
+            except ValueError as e:
+                # Input validation failure — can't safely recover the stream
+                try:
+                    send_error_response(conn, command, {
+                        "error": "validation_error",
+                        "message": str(e)
+                    })
+                except ConnectionError:
+                    pass
+                break
             except Exception as e:
                 # Unexpected error processing this request — send error, keep connection
                 try:
@@ -586,8 +668,8 @@ def handle_client(conn, manager):
                 except Exception:
                     pass  # Can't send error either, but don't kill the loop
 
-    except ConnectionError:
-        pass  # Client disconnected
+    except (ConnectionError, socket.timeout, TimeoutError):
+        pass  # Client disconnected or timed out
     finally:
         conn.close()
 
@@ -598,6 +680,7 @@ def main():
         os.remove(SOCKET_PATH)
 
     manager = TPUManager()
+    client_semaphore = threading.Semaphore(MAX_CLIENTS)
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(SOCKET_PATH)
@@ -606,11 +689,21 @@ def main():
 
     print(f"Edge TPU service listening on {SOCKET_PATH}")
 
+    def _guarded_handle_client(conn, mgr):
+        try:
+            handle_client(conn, mgr)
+        finally:
+            client_semaphore.release()
+
     while True:
         conn, _ = server.accept()
+        if not client_semaphore.acquire(blocking=False):
+            print("Max clients reached, rejecting connection")
+            conn.close()
+            continue
         print("Client connected")
         client_thread = threading.Thread(
-            target=handle_client,
+            target=_guarded_handle_client,
             args=(conn, manager),
             daemon=True
         )

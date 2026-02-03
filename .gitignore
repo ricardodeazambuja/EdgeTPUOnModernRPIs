@@ -14,3 +14,5 @@ env/
 *.swo
 *~
 .DS_Store
+EDGETPU_SERVICE.md
+INSTALL_PYENV.md

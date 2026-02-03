@@ -123,10 +123,8 @@ def cmd_infer(args):
 
     client = _connect(args)
     try:
+        client.load_model(args.model_path)
         result = client.infer(input_data)
-        if isinstance(result, dict) and "error" in result:
-            _error(result["error"], args)
-            sys.exit(1)
         _output_array(result, args, output_path=args.output)
     except EdgeTPUBusyError as e:
         _error(f"busy: {e}", args)
@@ -156,10 +154,8 @@ def cmd_embedding(args):
 
     client = _connect(args)
     try:
+        client.load_model(args.model_path)
         result = client.get_embedding(input_data, embedding_shape=shape)
-        if isinstance(result, dict) and "error" in result:
-            _error(result["error"], args)
-            sys.exit(1)
         _output_array(result, args, output_path=args.output)
     except EdgeTPUBusyError as e:
         _error(f"busy: {e}", args)
@@ -212,11 +208,13 @@ def main():
 
     # infer
     p_infer = sub.add_parser("infer", help="Run inference on a .npy input")
+    p_infer.add_argument("model_path", help="Path to *_edgetpu.tflite model file")
     p_infer.add_argument("input_npy", help="Path to input .npy file")
     p_infer.add_argument("-o", "--output", help="Save output to .npy file")
 
     # embedding
     p_embed = sub.add_parser("embedding", help="Extract embedding from a .npy input")
+    p_embed.add_argument("model_path", help="Path to *_edgetpu.tflite model file")
     p_embed.add_argument("input_npy", help="Path to input .npy file")
     p_embed.add_argument("-o", "--output", help="Save output to .npy file")
     p_embed.add_argument("--shape", help="Embedding layer shape (comma-separated, e.g. 1,1280)")
