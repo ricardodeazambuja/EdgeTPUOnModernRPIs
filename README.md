@@ -158,17 +158,17 @@ edgetpu-cli status
 edgetpu-cli load-model /path/to/model_edgetpu.tflite
 
 # Run inference (input/output as .npy files)
-edgetpu-cli infer input.npy -o output.npy
+edgetpu-cli infer /path/to/model_edgetpu.tflite input.npy -o output.npy
 
 # Extract embedding
-edgetpu-cli embedding input.npy -o embedding.npy --shape 1,1280
+edgetpu-cli embedding /path/to/model_edgetpu.tflite input.npy -o embedding.npy --shape 1,1280
 
 # Re-scan for newly connected TPU devices (hot-plug)
 edgetpu-cli rescan-tpus
 
 # Machine-readable JSON output (all commands)
 edgetpu-cli --json ping
-edgetpu-cli --json infer input.npy
+edgetpu-cli --json infer /path/to/model_edgetpu.tflite input.npy
 ```
 
 Without `-o`, `infer` and `embedding` print a shape/dtype/values summary to stdout. With `--json`, all commands produce JSON output.
@@ -213,6 +213,7 @@ See the [`examples/`](examples/) directory for complete, annotated scripts:
 - [`picamera2_pose.py`](examples/picamera2_pose.py) — Live camera pose estimation with MoveNet
 - [`robust_inference.py`](examples/robust_inference.py) — Graceful error handling, TPU disconnect recovery, and reconnection
 - [`multi_client.py`](examples/multi_client.py) — Concurrent clients with multiple models and multi-TPU affinity routing
+- [`generate_report.py`](examples/generate_report.py) — Diagnostic and integration test report for bug reports
 
 ## Models
 
