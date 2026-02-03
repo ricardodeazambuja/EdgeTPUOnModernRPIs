@@ -167,6 +167,28 @@ def cmd_embedding(args):
         client.close()
 
 
+def cmd_pipeline(args):
+    """Run a multi-model pipeline on a .npy input."""
+    try:
+        input_data = np.load(args.input)
+    except Exception as e:
+        _error(f"Cannot load input: {e}", args)
+        sys.exit(1)
+
+    client = _connect(args)
+    try:
+        result = client.pipeline(args.models, input_data)
+        _output_array(result, args, output_path=args.output)
+    except EdgeTPUBusyError as e:
+        _error(f"busy: {e}", args)
+        sys.exit(1)
+    except Exception as e:
+        _error(str(e), args)
+        sys.exit(1)
+    finally:
+        client.close()
+
+
 def cmd_rescan_tpus(args):
     """Trigger a rescan for Edge TPU devices."""
     client = _connect(args)
@@ -219,6 +241,12 @@ def main():
     p_embed.add_argument("-o", "--output", help="Save output to .npy file")
     p_embed.add_argument("--shape", help="Embedding layer shape (comma-separated, e.g. 1,1280)")
 
+    # pipeline
+    p_pipe = sub.add_parser("pipeline", help="Run a multi-model pipeline on a .npy input")
+    p_pipe.add_argument("models", nargs="+", help="Model paths in pipeline order (>= 2)")
+    p_pipe.add_argument("--input", required=True, help="Path to input .npy file")
+    p_pipe.add_argument("-o", "--output", help="Save output to .npy file")
+
     # rescan-tpus
     sub.add_parser("rescan-tpus", help="Re-scan for Edge TPU devices (hot-plug support)")
 
@@ -230,6 +258,7 @@ def main():
         "load-model": cmd_load_model,
         "infer": cmd_infer,
         "embedding": cmd_embedding,
+        "pipeline": cmd_pipeline,
         "rescan-tpus": cmd_rescan_tpus,
     }
 

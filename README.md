@@ -125,6 +125,20 @@ with EdgeTPUClient() as client:
     output = client.infer(input_data)
 ```
 
+### Pipeline (multi-model chaining)
+
+Chain multiple models server-side so intermediate tensors never cross the socket:
+
+```python
+with EdgeTPUClient() as client:
+    output = client.pipeline([
+        "/path/to/first_model_edgetpu.tflite",
+        "/path/to/second_model_edgetpu.tflite",
+    ], input_data)
+```
+
+The output of each model feeds directly into the next. Only the initial input and final output travel over the wire. Each stage routes independently via TPU affinity, so models already loaded on different TPUs avoid reloading.
+
 ### Handling busy errors
 
 When multiple clients are active and the inference queue is full, methods raise `EdgeTPUBusyError`:
@@ -162,6 +176,9 @@ edgetpu-cli infer /path/to/model_edgetpu.tflite input.npy -o output.npy
 
 # Extract embedding
 edgetpu-cli embedding /path/to/model_edgetpu.tflite input.npy -o embedding.npy --shape 1,1280
+
+# Run a multi-model pipeline (output of model A feeds into model B)
+edgetpu-cli pipeline model_a_edgetpu.tflite model_b_edgetpu.tflite --input data.npy -o output.npy
 
 # Re-scan for newly connected TPU devices (hot-plug)
 edgetpu-cli rescan-tpus
@@ -211,6 +228,7 @@ See the [`examples/`](examples/) directory for complete, annotated scripts:
 - [`picamera2_detection.py`](examples/picamera2_detection.py) — Live camera object detection with bounding boxes
 - [`picamera2_embedding.py`](examples/picamera2_embedding.py) — Live camera embedding extraction
 - [`picamera2_pose.py`](examples/picamera2_pose.py) — Live camera pose estimation with MoveNet
+- [`pipeline_inference.py`](examples/pipeline_inference.py) — Chain multiple models server-side (intermediate tensors stay on server)
 - [`robust_inference.py`](examples/robust_inference.py) — Graceful error handling, TPU disconnect recovery, and reconnection
 - [`multi_client.py`](examples/multi_client.py) — Concurrent clients with multiple models and multi-TPU affinity routing
 - [`generate_report.py`](examples/generate_report.py) — Diagnostic and integration test report for bug reports

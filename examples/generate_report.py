@@ -390,6 +390,42 @@ def test_client_inference(results):
         return CheckResult("Python client: inference", False, str(e))
 
 
+def test_client_pipeline(results):
+    skip = _service_prereq(results) or _model_prereq(results)
+    if skip:
+        return CheckResult("Python client: pipeline", False, f"SKIPPED — {skip}")
+    try:
+        import numpy as np
+        from rpi_edgetpu import EdgeTPUClient
+
+        client = EdgeTPUClient()
+        meta = client.load_model(MODEL_PATH)
+        input_shape = meta["input_shape"]
+        input_dtype = meta["input_dtype"]
+        dt = np.dtype(input_dtype.replace("<class '", "").replace("'>", "").strip())
+        dummy = np.zeros(input_shape, dtype=dt)
+
+        # Chain the same model twice — stage 1 will fail because the
+        # output shape [1, 1001] doesn't match input shape [1, 224, 224, 3]
+        try:
+            client.pipeline([MODEL_PATH, MODEL_PATH], dummy)
+            # If it somehow succeeds, that's unexpected but not a failure
+            client.close()
+            return CheckResult(
+                "Python client: pipeline", True,
+                "Pipeline succeeded (unexpected — model may accept its own output)"
+            )
+        except Exception as e:
+            msg = str(e)
+            client.close()
+            # We expect a stage-failure error mentioning stage 1
+            ok = "stage" in msg.lower() or "pipeline" in msg.lower()
+            detail = f"Expected error at stage 1: {msg}"
+            return CheckResult("Python client: pipeline", ok, detail)
+    except Exception as e:
+        return CheckResult("Python client: pipeline", False, str(e))
+
+
 def test_client_already_loaded(results):
     skip = _service_prereq(results) or _model_prereq(results)
     if skip:
@@ -616,6 +652,7 @@ def generate_report():
     integration_tests.append(test_client_ping(system_checks))
     integration_tests.append(test_client_load_model(system_checks))
     integration_tests.append(test_client_inference(system_checks))
+    integration_tests.append(test_client_pipeline(system_checks))
     integration_tests.append(test_client_already_loaded(system_checks))
     rescan_result = test_client_rescan(system_checks)
     integration_tests.append(rescan_result)

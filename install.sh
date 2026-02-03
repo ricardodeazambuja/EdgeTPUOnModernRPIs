@@ -393,7 +393,7 @@ def send_error_response(conn, command, error_dict):
     For everything else: just length-prefixed JSON.
     """
     resp_bytes = json.dumps(error_dict).encode('utf-8')
-    if command in ('infer', 'embedding'):
+    if command in ('infer', 'embedding', 'pipeline'):
         conn.sendall(struct.pack('!I', 0))
         conn.sendall(struct.pack('!I', len(resp_bytes)) + resp_bytes)
     else:
@@ -559,6 +559,99 @@ def handle_client(conn, manager):
                     request['_slot_idx'] = client_tpu_idx
                     if command == 'embedding':
                         request['embedding_shape'] = header.get('embedding_shape', [1, 1280])
+
+                elif command == 'pipeline':
+                    # Multi-model pipeline: chain N models server-side
+                    models = header.get('models')
+                    if not isinstance(models, list) or len(models) < 2:
+                        send_error_response(conn, command, {
+                            "error": "validation_error",
+                            "message": "pipeline requires a list of >= 2 model paths"
+                        })
+                        # Consume input data if present
+                        data_size = header.get('data_size', 0)
+                        if data_size > 0:
+                            recv_exact(conn, data_size)
+                        continue
+
+                    # Validate and receive initial input array
+                    _validate_array_header(header)
+                    array_bytes = recv_exact(conn, header['data_size'])
+                    current_data = np.frombuffer(
+                        array_bytes, dtype=header['dtype']
+                    ).reshape(header['shape'])
+
+                    # Run each stage: load_model → infer → pass output forward
+                    for stage_idx, model_path in enumerate(models):
+                        try:
+                            tpu_idx = manager.route(model_path)
+
+                            # Enqueue load_model
+                            load_req = {
+                                'command': 'load_model',
+                                'model_path': model_path,
+                                '_slot_idx': tpu_idx,
+                            }
+                            load_future = concurrent.futures.Future()
+                            manager.slots[tpu_idx].queue.put(
+                                (load_req, load_future), block=False
+                            )
+                            load_result = load_future.result(
+                                timeout=FUTURE_TIMEOUT
+                            )
+                            if isinstance(load_result, dict) and 'error' in load_result:
+                                raise RuntimeError(
+                                    load_result.get('message', load_result['error'])
+                                )
+
+                            # Enqueue infer
+                            infer_req = {
+                                'command': 'infer',
+                                'input_data': current_data,
+                                '_slot_idx': tpu_idx,
+                            }
+                            infer_future = concurrent.futures.Future()
+                            manager.slots[tpu_idx].queue.put(
+                                (infer_req, infer_future), block=False
+                            )
+                            result = infer_future.result(
+                                timeout=FUTURE_TIMEOUT
+                            )
+                            if isinstance(result, dict) and 'error' in result:
+                                raise RuntimeError(
+                                    result.get('message', result['error'])
+                                )
+
+                            current_data = result
+                        except queue.Full:
+                            send_error_response(conn, command, {
+                                "error": "pipeline_stage_failed",
+                                "stage": stage_idx,
+                                "model": model_path,
+                                "message": "Inference queue is full"
+                            })
+                            break
+                        except Exception as e:
+                            send_error_response(conn, command, {
+                                "error": "pipeline_stage_failed",
+                                "stage": stage_idx,
+                                "model": model_path,
+                                "message": str(e)
+                            })
+                            break
+                    else:
+                        # All stages succeeded — send final numpy array
+                        current_data = np.ascontiguousarray(current_data)
+                        out_header = json.dumps({
+                            'shape': list(current_data.shape),
+                            'dtype': str(current_data.dtype)
+                        }).encode('utf-8')
+                        conn.sendall(struct.pack('!I', current_data.nbytes))
+                        conn.sendall(
+                            struct.pack('!I', len(out_header)) + out_header
+                        )
+                        conn.sendall(current_data)
+                    continue
 
                 elif command == 'rescan_tpus':
                     count = manager.rescan()

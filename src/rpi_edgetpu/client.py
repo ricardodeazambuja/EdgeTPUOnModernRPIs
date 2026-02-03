@@ -206,6 +206,31 @@ class EdgeTPUClient:
         }, input_array)
         return self._recv_array_response()
 
+    def pipeline(self, models, input_array):
+        """Run a multi-model pipeline server-side.
+
+        Each model's output feeds into the next model's input.
+        Intermediate tensors stay on the server.
+
+        Args:
+            models: list of paths to *_edgetpu.tflite files (>= 2)
+            input_array: numpy array matching the first model's expected input
+
+        Returns:
+            numpy array of the final model's output
+        """
+        if not isinstance(models, list) or len(models) < 2:
+            raise ValueError("pipeline requires a list of >= 2 model paths")
+        input_array = np.ascontiguousarray(input_array)
+        self._send_command({
+            'command': 'pipeline',
+            'models': models,
+            'shape': list(input_array.shape),
+            'dtype': str(input_array.dtype),
+            'data_size': input_array.nbytes,
+        }, input_array)
+        return self._recv_array_response()
+
     def rescan_tpus(self):
         """Tell the service to re-scan for Edge TPU devices."""
         self._send_command({'command': 'rescan_tpus'})
