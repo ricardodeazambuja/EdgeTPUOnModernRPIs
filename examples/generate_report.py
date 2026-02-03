@@ -320,7 +320,8 @@ def test_client_ping(results):
         rtt_ms = (time.monotonic() - t0) * 1000
         client.close()
         ok = isinstance(resp, dict) and resp.get("status") == "ok"
-        detail = f"Response: {resp}\nRTT: {rtt_ms:.1f} ms"
+        version = resp.get("version", "N/A")
+        detail = f"Response: {resp}\nService version: {version}\nRTT: {rtt_ms:.1f} ms"
         return CheckResult("Python client: ping", ok, detail)
     except Exception as e:
         return CheckResult("Python client: ping", False, str(e))
@@ -646,6 +647,18 @@ def generate_report():
     except Exception:
         pass
 
+    # Get service version from ping
+    svc_version = "N/A"
+    try:
+        from rpi_edgetpu import EdgeTPUClient
+        client = EdgeTPUClient()
+        resp = client.ping()
+        client.close()
+        if isinstance(resp, dict):
+            svc_version = resp.get("version", "N/A")
+    except Exception:
+        pass
+
     # --- Part 1: System checks ---
     print("Running system checks ...", file=sys.stderr)
     system_checks = [
@@ -700,6 +713,7 @@ def generate_report():
         "  EdgeTPU Diagnostic + Test Report",
         f"  Generated: {now}",
         f"  rpi-edgetpu version: {pkg_version}",
+        f"  service version: {svc_version}",
         sep,
         "",
     ]

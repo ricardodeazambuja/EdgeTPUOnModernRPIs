@@ -85,6 +85,7 @@ CLIENT_TIMEOUT = 60.0
 FUTURE_TIMEOUT = 60.0
 MAX_DATA_SIZE = 100 * 1024 * 1024  # 100 MB
 ALLOWED_DTYPES = frozenset(["uint8", "int8", "float32", "float64", "int32", "int64"])
+SERVICE_VERSION = "0.3.0"
 
 # Exception strings that indicate a TPU hardware error (device disconnected, etc.)
 _TPU_DEVICE_ERROR_SUBSTRINGS = (
@@ -429,7 +430,7 @@ def inference_worker(slot, manager):
                     request.get('embedding_shape', [1, 1280])
                 )
             elif command == 'ping':
-                result = {'status': 'ok'}
+                result = {'status': 'ok', 'version': SERVICE_VERSION}
             else:
                 result = {'error': f'unknown command: {command}'}
             future.set_result(result)

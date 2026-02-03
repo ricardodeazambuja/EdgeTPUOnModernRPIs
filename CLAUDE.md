@@ -58,6 +58,13 @@ Changes to the protocol must be coordinated between `service.py` and `client.py`
 - **install.sh is not just shell**: It contains a full Python service (~560 lines) as a heredoc. Don't edit the embedded Python directly — edit `service.py` and sync.
 - **No test suite**: Testing happens manually on a Raspberry Pi 4 with Coral USB Accelerator(s). Example scripts in `examples/` serve as integration tests.
 
+## Version maintenance
+
+Version bumps touch 3 places:
+1. `pyproject.toml` — `version`
+2. `src/rpi_edgetpu/__init__.py` — `__version__`
+3. `src/rpi_edgetpu/service.py` — `SERVICE_VERSION`
+
 ## Commit messages
 
 - Use imperative mood, focus on "why" not "what"
