@@ -75,19 +75,6 @@ def download_model(url, dest):
         return False, f"Download failed: {e}"
 
 
-def parse_dtype(dtype_str):
-    """Parse a dtype string from the service, handling old and new formats.
-
-    Old format: "<class 'numpy.uint8'>" → uint8
-    New format: "uint8" → uint8
-    """
-    cleaned = dtype_str.replace("<class '", "").replace("'>", "").strip()
-    # Strip 'numpy.' prefix that numpy 2.x doesn't accept as a dtype string
-    if cleaned.startswith("numpy."):
-        cleaned = cleaned[len("numpy."):]
-    return np.dtype(cleaned)
-
-
 def fmt_lines(text, indent="  "):
     """Indent every line of text."""
     return "\n".join(f"{indent}{line}" for line in text.splitlines())
@@ -371,7 +358,7 @@ def test_client_inference(results):
         input_dtype = meta["input_dtype"]
 
         # Resolve dtype string to numpy dtype
-        dt = parse_dtype(input_dtype)
+        dt = np.dtype(input_dtype)
         dummy = np.zeros(input_shape, dtype=dt)
 
         t0 = time.monotonic()
@@ -415,7 +402,7 @@ def test_client_pipeline(results):
         meta = client.load_model(MODEL_PATH)
         input_shape = meta["input_shape"]
         input_dtype = meta["input_dtype"]
-        dt = parse_dtype(input_dtype)
+        dt = np.dtype(input_dtype)
         dummy = np.zeros(input_shape, dtype=dt)
 
         # Chain the same model twice — stage 1 will fail because the
@@ -549,7 +536,7 @@ def test_cli_infer(results):
 
         input_shape = meta["input_shape"]
         input_dtype = meta["input_dtype"]
-        dt = parse_dtype(input_dtype)
+        dt = np.dtype(input_dtype)
 
         dummy = np.zeros(input_shape, dtype=dt)
         input_path = "/tmp/edgetpu_test_input.npy"
@@ -604,7 +591,7 @@ def test_multi_tpu(results, tpu_count):
 
         input_shape = meta_a["input_shape"]
         input_dtype = meta_a["input_dtype"]
-        dt = parse_dtype(input_dtype)
+        dt = np.dtype(input_dtype)
         dummy = np.zeros(input_shape, dtype=dt)
 
         out_a = client_a.infer(dummy)
