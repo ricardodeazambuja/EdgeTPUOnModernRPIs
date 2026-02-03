@@ -114,7 +114,7 @@ class EdgeTPUService:
             return {
                 "status": "already_loaded",
                 "input_shape": self.input_details[0]['shape'].tolist(),
-                "input_dtype": str(self.input_details[0]['dtype']),
+                "input_dtype": np.dtype(self.input_details[0]['dtype']).name,
                 "output_shape": self.output_details[0]['shape'].tolist()
             }
 
@@ -142,7 +142,7 @@ class EdgeTPUService:
         return {
             "status": "loaded",
             "input_shape": self.input_details[0]['shape'].tolist(),
-            "input_dtype": str(self.input_details[0]['dtype']),
+            "input_dtype": np.dtype(self.input_details[0]['dtype']).name,
             "output_shape": self.output_details[0]['shape'].tolist()
         }
 
